@@ -73,15 +73,15 @@ a logger that honors `SetLevelFor` for that name, immediately and again whenever
 the logger is rebuilt:
 
 ```go
-func (c *CFMongoDB) Init(ctx context.Context, fw *cf.CaerusFramework) error {
+func (c *CFPostgres) Init(ctx context.Context, fw *cf.CaerusFramework) error {
     if logs, ok := caerusframework.Get[*cf_logs.Logs](fw); ok {
         c.logsSub = logs.OnReconfigureFor(c.Name(), func(l *slog.Logger) { c.log = l })
     }
-    c.log.Info("initializing mongo component")
+    c.log.Info("initializing postgresql component")
     return nil
 }
 
-func (c *CFMongoDB) Shutdown(ctx context.Context) error {
+func (c *CFPostgres) Shutdown(ctx context.Context) error {
     if c.logsSub != nil {
         c.logsSub.Unsubscribe()
         c.logsSub = nil
@@ -93,7 +93,7 @@ func (c *CFMongoDB) Shutdown(ctx context.Context) error {
 Other components may also depend on it by name in `GetDependencies`:
 
 ```go
-func (c *CFMongoDB) GetDependencies() []string { return []string{cf_logs.ComponentName} }
+func (c *CFPostgres) GetDependencies() []string { return []string{cf_logs.ComponentName} }
 ```
 
 ### Configuration
