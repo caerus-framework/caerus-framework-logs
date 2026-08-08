@@ -174,8 +174,8 @@ Implements `caerusframework.CaerusComponent`:
 - `Name()` → `"logs"` (`cf_logs.ComponentName`)
 - `GetInitOrderStage()` → `caerusframework.LogsStage` (first bootstrap stage)
 - `Init` / `Shutdown` → no-ops (nothing to allocate or release)
-- Implements `cf.MetricsProvider`: contributes `caerus_logs_info` (format, global
-  level, report_caller, stack traces) and one `caerus_logs_component_level`
+- Implements `cf.MetricsProvider`: contributes `logs_info` (format, global
+  level, report_caller, stack traces) and one `logs_component_level`
   sample per `SetLevelFor` override, live on every scrape.
 
 ## Docs
