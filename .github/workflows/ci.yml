@@ -16,3 +16,4 @@ jobs:
       module: caerus-framework-logs
       deps: "caerus-framework"
       coverage-min: "50"
+      caerusvet: true
