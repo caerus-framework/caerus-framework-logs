@@ -180,9 +180,10 @@ Implements `caerusframework.CaerusComponent`:
 
 ## Docs
 
-- [ARCHITECTURE.md](../caerus-framework/docs/ARCHITECTURE.md) — component model
-  and stage ordering.
-- [LIFECYCLE.md](../caerus-framework/docs/LIFECYCLE.md) — lifecycle guarantees.
+- [ARCHITECTURE.md](https://github.com/caerus-framework/caerus-framework/blob/main/docs/ARCHITECTURE.md)
+  — component model and stage ordering.
+- [LIFECYCLE.md](https://github.com/caerus-framework/caerus-framework/blob/main/docs/LIFECYCLE.md)
+  — lifecycle guarantees.
 
 ## License
 
