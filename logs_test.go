@@ -300,6 +300,30 @@ func TestConcurrentReconfigureAndLog(t *testing.T) {
 	wg.Wait()
 }
 
+func TestApplyConfigOmitsPreserveCallerAndStacks(t *testing.T) {
+	l := New(WithWriter(io.Discard), WithReportCaller(true), WithStackTraces(true))
+	if !l.ReportCaller() || !l.StackTraces() {
+		t.Fatal("precondition: caller and stacks should be enabled")
+	}
+
+	l.ApplyConfig(LogConfig{Level: "warn"})
+	if !l.ReportCaller() {
+		t.Fatal("omitted report_caller cleared ReportCaller")
+	}
+	if !l.StackTraces() {
+		t.Fatal("omitted stack_traces cleared StackTraces")
+	}
+	if l.Level() != slog.LevelWarn {
+		t.Fatalf("Level() = %v, want warn", l.Level())
+	}
+
+	off := false
+	l.ApplyConfig(LogConfig{ReportCaller: &off, StackTraces: &off})
+	if l.ReportCaller() || l.StackTraces() {
+		t.Fatal("explicit false did not disable caller/stacks")
+	}
+}
+
 func TestComponentContract(t *testing.T) {
 	l := New(WithWriter(&bytes.Buffer{}))
 	if l.Name() != ComponentName {
