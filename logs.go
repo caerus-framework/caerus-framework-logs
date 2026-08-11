@@ -354,11 +354,12 @@ func (l *Logs) Reconfigure(opts ...Option) {
 	}
 }
 
-// ApplyConfig applies a LogConfig to the running component. Format, report
-// caller and stack-trace settings rebuild the logger (delivering the new
-// logger to every OnReconfigure / OnReconfigureFor subscriber); the level is
-// applied through SetLevel so per-component overrides (SetLevelFor) keep
-// working. Invalid format/level values are logged and skipped (last-good).
+// ApplyConfig applies a LogConfig to the running component. Non-empty Format
+// and non-nil ReportCaller/StackTraces rebuild the logger (delivering the new
+// logger to every OnReconfigure / OnReconfigureFor subscriber); omitted bool
+// fields keep the current forensic knobs. Level is applied through SetLevel so
+// per-component overrides (SetLevelFor) keep working. Invalid format/level
+// values are logged and skipped (last-good).
 func (l *Logs) ApplyConfig(cfg LogConfig) {
 	opts := make([]Option, 0, 3)
 	if cfg.Format != "" {
@@ -369,8 +370,16 @@ func (l *Logs) ApplyConfig(cfg LogConfig) {
 			opts = append(opts, WithFormat(f))
 		}
 	}
-	opts = append(opts, WithReportCaller(cfg.ReportCaller), WithStackTraces(cfg.StackTraces))
-	l.Reconfigure(opts...)
+	// *bool: omitted/nil keeps the current forensic knobs (do not treat omit as false).
+	if cfg.ReportCaller != nil {
+		opts = append(opts, WithReportCaller(*cfg.ReportCaller))
+	}
+	if cfg.StackTraces != nil {
+		opts = append(opts, WithStackTraces(*cfg.StackTraces))
+	}
+	if len(opts) > 0 {
+		l.Reconfigure(opts...)
+	}
 	if cfg.Level != "" {
 		lv, err := ParseLevel(cfg.Level)
 		if err != nil {

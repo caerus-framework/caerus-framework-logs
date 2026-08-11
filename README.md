@@ -120,12 +120,14 @@ As a core component, logs takes its option values from the configuration
 component: register a `cf_configuration.Source[cf_logs.LogConfig]` owned by
 `cf_logs.ComponentName` (`config/logs.json` in the demoapp). The logs component
 is notified **once at `Init`** with the source's value and again on every change
-(`ApplyConfig`): format/caller/stack-trace flags rebuild the logger via
-`Reconfigure`; the level goes through `SetLevel` so `SetLevelFor(component, …)`
-overrides keep working. Invalid values are logged and skipped (last-good kept).
+(`ApplyConfig`): format and explicit caller/stack-trace flags rebuild the logger
+via `Reconfigure`; omitted `report_caller` / `stack_traces` keep the current
+values (`*bool` — omit ≠ false). Level goes through `SetLevel` so
+`SetLevelFor(component, …)` overrides keep working. Invalid values are logged
+and skipped (last-good kept).
 
 ```json
-{ "format": "json", "level": "info", "report_caller": false, "stack_traces": false }
+{ "format": "json", "level": "info", "report_caller": true, "stack_traces": false }
 ```
 
 ### Runtime reconfiguration
