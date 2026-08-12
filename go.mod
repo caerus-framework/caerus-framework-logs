@@ -2,7 +2,7 @@ module github.com/caerus-framework/caerus-framework-logs
 
 go 1.26
 
-require github.com/caerus-framework/caerus-framework v0.0.7
+require github.com/caerus-framework/caerus-framework v0.0.8
 
 require (
 	golang.org/x/mod v0.39.0 // indirect
