@@ -357,7 +357,7 @@ func (l *Logs) Reconfigure(opts ...Option) {
 // ApplyConfig applies a LogConfig to the running component. Non-empty Format
 // and non-nil ReportCaller/StackTraces rebuild the logger (delivering the new
 // logger to every OnReconfigure / OnReconfigureFor subscriber); omitted bool
-// fields keep the current forensic knobs. Level is applied through SetLevel so
+// fields keep the current forensic settings. Level is applied through SetLevel so
 // per-component overrides (SetLevelFor) keep working. Invalid format/level
 // values are logged and skipped (last-good).
 func (l *Logs) ApplyConfig(cfg LogConfig) {
@@ -370,7 +370,7 @@ func (l *Logs) ApplyConfig(cfg LogConfig) {
 			opts = append(opts, WithFormat(f))
 		}
 	}
-	// *bool: omitted/nil keeps the current forensic knobs (do not treat omit as false).
+	// *bool: omitted/nil keeps the current forensic settings (do not treat omit as false).
 	if cfg.ReportCaller != nil {
 		opts = append(opts, WithReportCaller(*cfg.ReportCaller))
 	}
