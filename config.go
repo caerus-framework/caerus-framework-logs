@@ -8,7 +8,7 @@ import (
 // the configuration component as the "logs" source. The logs component cannot
 // read the configuration component directly (import cycle), so the framework
 // delivers the freshly loaded value through OnConfigReload. Empty / nil fields
-// keep the current value (bool knobs are *bool so omit ≠ explicit false).
+// keep the current value (bool switches are *bool so omit ≠ explicit false).
 type LogConfig struct {
 	// Format is "text" or "json". Empty keeps the current format.
 	Format string `json:"format,omitempty" yaml:"format,omitempty" env:"FORMAT" flag:"log-format"`
