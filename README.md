@@ -29,6 +29,32 @@ tracebacks on errors — `log/slog` plus traceback.
   logger without polling.
 - Full `CaerusComponent` lifecycle; no `os.Exit`, no panics.
 
+## Cooperative redaction
+
+Logs **prints** secrets as `[redacted]`. Configuration **declares** which
+fields are secrets (`secret:"redact"` on the config struct). This is
+cooperative: `fmt.Sprintf`, error strings, and `slog.Info("cfg", cfg)` on a
+raw struct still leak. There is no process-wide `ReplaceAttr` on
+`slog.Default()`.
+
+| Concern | What to do | Default |
+|---|---|---|
+| Passwords, API keys, DSN userinfo | `secret:"redact"` + `cf_logs.RedactedString` / `cf_configuration.LogArgs` | Print `[redacted]`; presence via `SecretSet("password", v)` → `password_set=true` |
+| HTTP query, body, cookies | Stay off in RequestLog (http module) | Off |
+| Client IP | `ClientIP(addr, mode)` with `full` / `partial` / `omit` | Caller chooses. Pass the address you already trust (`RemoteAddr` after your proxy policy). Do **not** pass `X-Forwarded-For` into this helper — it does not decide whether a header is forged. |
+
+```go
+log.Info("reload", "password", cf_logs.RedactedString(cfg.Password), "host", cfg.Host)
+log.Info("reload", cf_logs.SecretSet("password", cfg.Password), "host", cfg.Host)
+log.Info("reload", cf_configuration.LogArgs(cfg)...) // honors secret tags; overlay/Get unchanged
+```
+
+`ReplaceAttrSecretKeys("password")` is an **opt-in** handler hook for keys you
+list. It does not walk structs.
+
+`RedactURLUserinfo` strips a URL password for error strings. Prefer not
+wrapping `pgx`/`url.Parse` errors that interpolate the raw DSN.
+
 ## Usage
 
 Complete wiring:
