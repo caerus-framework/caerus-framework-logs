@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
 	cf "github.com/caerus-framework/caerus-framework"
@@ -35,10 +36,10 @@ func (f Format) String() string {
 	}
 }
 
-// ParseFormat converts a canonical format name ("json", "text") into a Format.
-// It returns an error for unknown names.
+// ParseFormat converts a format name ("json", "text") into a Format.
+// Matching is case-insensitive (like ParseLevel); unknown names return an error.
 func ParseFormat(name string) (Format, error) {
-	switch name {
+	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "json":
 		return FormatJSON, nil
 	case "text":
@@ -222,8 +223,10 @@ func (l *Logs) Logger() *slog.Logger {
 }
 
 // LoggerFor returns a logger filtered by the named component's level override
-// when set, otherwise by the process-global SetLevel. The pointer is stable
-// until the next Reconfigure.
+// when set, otherwise by the process-global SetLevel. Each call allocates a
+// new wrapper; do not use it on a hot path. Framework components should
+// subscribe once with OnReconfigureFor(Name(), …) and cache that pointer
+// instead — it is rebuilt only on Reconfigure.
 func (l *Logs) LoggerFor(name string) *slog.Logger {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -355,13 +358,14 @@ func (l *Logs) Reconfigure(opts ...Option) {
 }
 
 // ApplyConfig applies a LogConfig to the running component. Non-empty Format
-// and non-nil ReportCaller/StackTraces rebuild the logger (delivering the new
-// logger to every OnReconfigure / OnReconfigureFor subscriber); omitted bool
-// fields keep the current forensic settings. Level is applied through SetLevel so
-// per-component overrides (SetLevelFor) keep working. Invalid format/level
-// values are logged and skipped (last-good).
+// and non-nil ReportCaller/StackTraces (and non-empty StackLevel) rebuild the
+// logger (delivering the new logger to every OnReconfigure / OnReconfigureFor
+// subscriber); omitted bool fields keep the current forensic settings. Level is
+// applied through SetLevel so per-component overrides (SetLevelFor) keep
+// working. Invalid format/level/stack_level values are logged and skipped
+// (last-good).
 func (l *Logs) ApplyConfig(cfg LogConfig) {
-	opts := make([]Option, 0, 3)
+	opts := make([]Option, 0, 4)
 	if cfg.Format != "" {
 		f, err := ParseFormat(cfg.Format)
 		if err != nil {
@@ -377,6 +381,14 @@ func (l *Logs) ApplyConfig(cfg LogConfig) {
 	if cfg.StackTraces != nil {
 		opts = append(opts, WithStackTraces(*cfg.StackTraces))
 	}
+	if cfg.StackLevel != "" {
+		lv, err := ParseLevel(cfg.StackLevel)
+		if err != nil {
+			l.Logger().Error("cf_logs: invalid stack_level in log config; keeping previous", "stack_level", cfg.StackLevel, "err", err)
+		} else {
+			opts = append(opts, WithStackLevel(lv))
+		}
+	}
 	if len(opts) > 0 {
 		l.Reconfigure(opts...)
 	}
@@ -388,18 +400,54 @@ func (l *Logs) ApplyConfig(cfg LogConfig) {
 			l.SetLevel(lv)
 		}
 	}
+	if cfg.ComponentLevels != nil {
+		l.applyComponentLevels(cfg.ComponentLevels)
+	}
+}
+
+// applyComponentLevels replaces per-component overrides from a LogConfig map.
+// Invalid level names are skipped (that key keeps last-good). Names missing
+// from the map are ResetLevel'd so removing a key returns that component to
+// the process-global level.
+func (l *Logs) applyComponentLevels(want map[string]string) {
+	keep := make(map[string]struct{}, len(want))
+	for name, raw := range want {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		lv, err := ParseLevel(raw)
+		if err != nil {
+			l.Logger().Error("cf_logs: invalid component_levels entry; keeping previous for that name",
+				"component", name, "level", raw, "err", err)
+			keep[name] = struct{}{}
+			continue
+		}
+		l.SetLevelFor(name, lv)
+		keep[name] = struct{}{}
+	}
+	for name := range l.Overrides() {
+		if _, ok := keep[name]; !ok {
+			l.ResetLevel(name)
+		}
+	}
 }
 
 // OnConfigReload implements cf.ConfigReloader. It applies the freshly loaded
 // LogConfig for the source named by WithConfigSource (see ApplyConfig). The
 // configuration component delivers the value directly because the logs module
-// cannot import it.
+// cannot import it. A wrong payload type is logged and ignored (last-good).
 func (l *Logs) OnConfigReload(source string, cfg any) {
 	if source != l.configSource {
 		return
 	}
 	c, ok := cfg.(*LogConfig)
 	if !ok {
+		l.Logger().Error("cf_logs: config reload rejected; unexpected type",
+			"source", source,
+			"got", fmt.Sprintf("%T", cfg),
+			"want", "*cf_logs.LogConfig",
+		)
 		return
 	}
 	l.ApplyConfig(*c)

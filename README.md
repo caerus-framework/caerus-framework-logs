@@ -55,71 +55,83 @@ list. It does not walk structs.
 `RedactURLUserinfo` strips a URL password for error strings. Prefer not
 wrapping `pgx`/`url.Parse` errors that interpolate the raw DSN.
 
-## Usage
+## Wiring
 
-Complete wiring:
+Two wiring shapes are supported. Prefer the **golden** path: seed logs through
+`cf.FrameworkOptions.Logs` so core registers the component and binds its config
+source. Use bare `AddComponent` only for one-off binaries or tests.
+
+### Golden path (`FrameworkOptions.Logs`)
+
+`cf.New` always builds logs as the first bootstrap stage. Point it at the
+`logs` configuration source (default file `config/logs.json`, env `LOGS_`)
+with the seed’s `ConfigSource` field:
 
 ```go
-package main
-
-import (
-    "context"
-    "log/slog"
-    "os"
-    "os/signal"
-    "syscall"
-
-    caerusframework "github.com/caerus-framework/caerus-framework"
-    cf_logs "github.com/caerus-framework/caerus-framework-logs"
-)
-
-func main() {
-    fw := caerusframework.New() // bootstrap stages pre-registered; LogsStage first
-
-    logsComp := cf_logs.New(
-        cf_logs.WithWriter(os.Stdout),
-        cf_logs.WithFormat(cf_logs.FormatJSON),
-        cf_logs.WithLevel(slog.LevelInfo),
-        cf_logs.WithReportCaller(true),
-        cf_logs.WithStackTraces(true), // traceback on slog.LevelError and above
-    )
-    if err := fw.AddComponent(logsComp); err != nil { /* ... */ }
-
-    // ... register the rest of the components ...
-
-    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-    defer stop()
-    if err := fw.Run(ctx); err != nil { /* app failed */ }
+fw := cf.New(&cf.FrameworkOptions{
+	Logs: &cf.LogsSettings{
+		Format:       "json",
+		Level:        "info",
+		ConfigSource: "logs", // Source.Name; Owner is cf_logs.ComponentName
+		// Optional forensics (same fields as LogConfig; *bool omit = default):
+		// ReportCaller: ptr(true), StackTraces: ptr(true), StackLevel: "error",
+	},
+	Observability: &cf.ObservabilitySettings{Bind: ":9090", ConfigSource: "observability"},
+	Components: []cf.CaerusComponent{
+		// chassis + app class …
+	},
+})
+if err := fw.RunWithSignals(context.Background()); err != nil {
+	log.Fatal(err)
 }
 ```
 
-From another component's `Init` (logging initializes first, so it is always
-available). Prefer `OnReconfigureFor(c.Name(), …)` over `Logger()`: it delivers
-a logger that honors `SetLevelFor` for that name, immediately and again whenever
-the logger is rebuilt:
+Import `_ "github.com/caerus-framework/caerus-framework-logs"` (or any
+`cf_logs` symbol) so the core factory registers. Peers subscribe in `Init`
+with `OnReconfigureFor(c.Name(), …)` and list `cf_logs.ComponentName` in
+`GetDependencies`:
 
 ```go
+func (c *CFPostgres) GetDependencies() []string {
+	return []string{cf_logs.ComponentName}
+}
+
 func (c *CFPostgres) Init(ctx context.Context, fw *cf.CaerusFramework) error {
-    if logs, ok := caerusframework.Get[*cf_logs.Logs](fw); ok {
-        c.logsSub = logs.OnReconfigureFor(c.Name(), func(l *slog.Logger) { c.log = l })
-    }
-    c.log.Info("initializing postgresql component")
-    return nil
+	if !c.loggerSet {
+		if logs, ok := cf.Get[*cf_logs.Logs](fw); ok {
+			c.logsSub = logs.OnReconfigureFor(c.Name(), func(l *slog.Logger) { c.log = l })
+		}
+	}
+	c.log.Info("initializing postgresql component")
+	return nil
 }
 
 func (c *CFPostgres) Shutdown(ctx context.Context) error {
-    if c.logsSub != nil {
-        c.logsSub.Unsubscribe()
-        c.logsSub = nil
-    }
-    // ...
+	if c.logsSub != nil {
+		c.logsSub.Unsubscribe()
+		c.logsSub = nil
+	}
+	// …
+	return nil
 }
 ```
 
-Other components may also depend on it by name in `GetDependencies`:
+### Simple path (`AddComponent`)
+
+For a minimal binary that builds logs by hand:
 
 ```go
-func (c *CFPostgres) GetDependencies() []string { return []string{cf_logs.ComponentName} }
+fw := cf.New()
+logsComp := cf_logs.New(
+	cf_logs.WithWriter(os.Stdout),
+	cf_logs.WithFormat(cf_logs.FormatJSON),
+	cf_logs.WithLevel(slog.LevelInfo),
+	cf_logs.WithReportCaller(true),
+	cf_logs.WithStackTraces(true), // traceback on slog.LevelError and above
+	cf_logs.WithConfigSource("logs"),
+)
+_ = fw.AddComponent(logsComp)
+// … register the rest, then Run / RunWithSignals
 ```
 
 ### Configuration
@@ -136,9 +148,15 @@ Options are construction-time `cf_logs.Option`s:
 | `WithStackLevel(slog.Level)` | `slog.LevelError` | Threshold for stack tracebacks. |
 | `WithConfigSource(string)` | `""` | Bind a `Source[LogConfig]` (owner `cf_logs.ComponentName`); `OnConfigReload` applies its value live via `ApplyConfig`. |
 
+`cf.LogsSettings` (golden seed) mirrors `LogConfig`: `Format`, `Level`,
+`ReportCaller` / `StackTraces` (`*bool`), `StackLevel` (string), and
+`ConfigSource`. File/env reload still wins after Init.
+
 Level and format names are parseable for config-driven setup via
-`ParseFormat` (json/text) and `ParseLevel` (debug/info/warn|warning/error,
-case-insensitive; invalid values fall back to `LevelInfo`).
+`ParseFormat` (json/text) and `ParseLevel` (debug/info/warn|warning/error).
+Both are **case-insensitive**; invalid values fail parse (format) or fall
+back to `LevelInfo` with an error (level). `stack_level` uses the same
+level names.
 
 ### Config-driven (`LogConfig` / `WithConfigSource`)
 
@@ -153,8 +171,11 @@ values (`*bool` — omit ≠ false). Level goes through `SetLevel` so
 and skipped (last-good kept).
 
 ```json
-{ "format": "json", "level": "info", "report_caller": true, "stack_traces": false }
+{ "format": "json", "level": "info", "report_caller": true, "stack_traces": false, "stack_level": "error" }
 ```
+
+`stack_level` is the threshold for tracebacks when `stack_traces` is on
+(same names as `level`; empty keeps the current threshold, default error).
 
 ### Runtime reconfiguration
 
@@ -195,16 +216,39 @@ immediately. A component override may be **noisier or quieter** than the global
 level. `Logs.Shutdown` drops all remaining subscribers, so no deliveries happen
 during teardown.
 
+Reloadable map (same names as `level`):
+
+```json
+{
+  "format": "json",
+  "level": "info",
+  "component_levels": { "interest": "debug" }
+}
+```
+
+Keys are component `Name()` values (`WithName("interest")` → `"interest"`, not
+the default `"vpq"`). Applying a map **replaces** overrides: a name missing from
+the new map follows the process-global level again. Omit the field to keep
+last-good; `"component_levels": {}` clears all overrides. Invalid entries log
+Error and skip that key.
+
 ## Component contract
 
 Implements `caerusframework.CaerusComponent`:
 
 - `Name()` → `"logs"` (`cf_logs.ComponentName`)
 - `GetInitOrderStage()` → `caerusframework.LogsStage` (first bootstrap stage)
-- `Init` / `Shutdown` → no-ops (nothing to allocate or release)
-- Implements `cf.MetricsProvider`: contributes `logs_info` (format, global
-  level, report_caller, stack traces) and one `logs_component_level`
-  sample per `SetLevelFor` override, live on every scrape.
+- `Init` → no-op (logger already built at construction; peers subscribe later)
+- `Shutdown` → clears `OnReconfigure` / `OnReconfigureFor` subscribers so they
+  stop receiving rebuilt loggers during teardown (the writer is still the
+  caller's concern)
+
+Does **not** implement `MetricsProvider`. Bootstrap logs cannot import
+`caerus-framework-observability` (cycle). When both are registered,
+observability’s private `logsMetricsCollector` scrapes this component and
+emits `logs_info` (format, global level, report_caller, stack traces, stack
+level) plus one `logs_component_level` sample per `SetLevelFor` override on
+every `/metrics` scrape.
 
 ## Docs
 
