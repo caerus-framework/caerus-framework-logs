@@ -22,6 +22,16 @@ type LogConfig struct {
 	// level (default error). Nil keeps the current setting; explicit true/false
 	// overrides.
 	StackTraces *bool `json:"stack_traces,omitempty" yaml:"stack_traces,omitempty" env:"STACK_TRACES" flag:"stack-traces"`
+	// StackLevel is the threshold for stack tracebacks ("debug", "info", "warn",
+	// "error"). Empty keeps the current threshold (default error). Only takes
+	// effect when stack traces are enabled.
+	StackLevel string `json:"stack_level,omitempty" yaml:"stack_level,omitempty" env:"STACK_LEVEL" flag:"stack-level"`
+	// ComponentLevels maps component Name() → level name. Applied via SetLevelFor
+	// on load/reload. Keys not listed are ResetLevel'd so a removed map entry
+	// follows the process-global level again. Nil/omitted keeps current overrides
+	// (API SetLevelFor from code is not wiped). An empty map {} clears all
+	// config-owned overrides.
+	ComponentLevels map[string]string `json:"component_levels,omitempty" yaml:"component_levels,omitempty"`
 }
 
 // Register the logs core factory so cf.New(FrameworkOptions) can build the
@@ -44,6 +54,19 @@ func init() {
 					return nil, err
 				}
 				opts = append(opts, WithLevel(lv))
+			}
+			if settings.ReportCaller != nil {
+				opts = append(opts, WithReportCaller(*settings.ReportCaller))
+			}
+			if settings.StackTraces != nil {
+				opts = append(opts, WithStackTraces(*settings.StackTraces))
+			}
+			if settings.StackLevel != "" {
+				lv, err := ParseLevel(settings.StackLevel)
+				if err != nil {
+					return nil, err
+				}
+				opts = append(opts, WithStackLevel(lv))
 			}
 			if settings.ConfigSource != "" {
 				opts = append(opts, WithConfigSource(settings.ConfigSource))

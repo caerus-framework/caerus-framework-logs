@@ -62,7 +62,11 @@ func TestParseFormat(t *testing.T) {
 		want Format
 	}{
 		{"json", FormatJSON},
+		{"JSON", FormatJSON},
+		{" Json ", FormatJSON},
 		{"text", FormatText},
+		{"TEXT", FormatText},
+		{" Text ", FormatText},
 	} {
 		got, err := ParseFormat(tc.name)
 		if err != nil {
@@ -321,6 +325,67 @@ func TestApplyConfigOmitsPreserveCallerAndStacks(t *testing.T) {
 	l.ApplyConfig(LogConfig{ReportCaller: &off, StackTraces: &off})
 	if l.ReportCaller() || l.StackTraces() {
 		t.Fatal("explicit false did not disable caller/stacks")
+	}
+}
+
+func TestApplyConfigStackLevel(t *testing.T) {
+	l := New(WithWriter(io.Discard), WithStackTraces(true), WithStackLevel(slog.LevelError))
+	l.ApplyConfig(LogConfig{StackLevel: "warn"})
+	if l.StackLevel() != slog.LevelWarn {
+		t.Fatalf("stack_level = %v, want Warn", l.StackLevel())
+	}
+	l.ApplyConfig(LogConfig{StackLevel: "not-a-level"})
+	if l.StackLevel() != slog.LevelWarn {
+		t.Fatal("invalid stack_level must keep last-good")
+	}
+}
+
+func TestApplyConfigComponentLevels(t *testing.T) {
+	l := New(WithWriter(io.Discard), WithLevel(slog.LevelInfo))
+	l.SetLevelFor("handset", slog.LevelDebug)
+	l.ApplyConfig(LogConfig{ComponentLevels: map[string]string{
+		"interest": "debug",
+		"bad":      "nope",
+	}})
+	if l.LevelFor("interest") != slog.LevelDebug {
+		t.Fatal("interest should be debug")
+	}
+	if _, ok := l.Overrides()["handset"]; ok {
+		t.Fatal("names omitted from the map must ResetLevel")
+	}
+	if l.LevelFor("bad") != slog.LevelInfo {
+		t.Fatal("invalid entry must not SetLevelFor")
+	}
+	l.ApplyConfig(LogConfig{ComponentLevels: map[string]string{}})
+	if len(l.Overrides()) != 0 {
+		t.Fatalf("empty map must clear overrides, got %v", l.Overrides())
+	}
+	l.SetLevelFor("interest", slog.LevelDebug)
+	l.ApplyConfig(LogConfig{Level: "warn"}) // omitted map keeps last-good
+	if l.LevelFor("interest") != slog.LevelDebug {
+		t.Fatal("omitted component_levels must keep overrides")
+	}
+}
+
+func TestOnConfigReloadTypeMismatch(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(WithWriter(&buf), WithConfigSource("logs"), WithFormat(FormatText))
+	before := l.Format()
+	l.OnConfigReload("logs", "not-a-log-config")
+	if l.Format() != before {
+		t.Fatal("type mismatch must keep last-good")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "config reload rejected") {
+		t.Fatalf("want Error log on type mismatch, got %q", out)
+	}
+	buf.Reset()
+	l.OnConfigReload("other", &LogConfig{Format: "json"})
+	if buf.Len() != 0 {
+		t.Fatalf("wrong source must not log, got %q", buf.String())
+	}
+	if l.Format() != before {
+		t.Fatal("wrong source must not apply")
 	}
 }
 
