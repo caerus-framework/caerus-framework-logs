@@ -1,6 +1,9 @@
 package cf_logs
 
 import (
+	"fmt"
+	"strings"
+
 	cf "github.com/caerus-framework/caerus-framework"
 )
 
@@ -29,6 +32,39 @@ func (l *Logs) CoreConfigSource() ([]cf.ConfigSourceValue, error) {
 		Format:    "json",
 		EnvPrefix: "LOGS_",
 		Owner:     ComponentName,
+		Validate:  validateLogConfigValue,
 		Sample:    LogConfig{},
 	}}, nil
+}
+
+func validateLogConfigValue(v any) error {
+	cfg, ok := v.(*LogConfig)
+	if !ok {
+		return fmt.Errorf("cf_logs: validate config: unexpected type %T", v)
+	}
+	if cfg.Format != "" {
+		if _, err := ParseFormat(cfg.Format); err != nil {
+			return err
+		}
+	}
+	if cfg.Level != "" {
+		if _, err := ParseLevel(cfg.Level); err != nil {
+			return err
+		}
+	}
+	if cfg.StackLevel != "" {
+		if _, err := ParseLevel(cfg.StackLevel); err != nil {
+			return err
+		}
+	}
+	for name, raw := range cfg.ComponentLevels {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, err := ParseLevel(raw); err != nil {
+			return fmt.Errorf("cf_logs: component_levels[%q]: %w", name, err)
+		}
+	}
+	return nil
 }
