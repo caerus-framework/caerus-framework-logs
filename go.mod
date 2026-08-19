@@ -12,4 +12,3 @@ require (
 
 tool github.com/caerus-framework/caerus-framework/cmd/caerusvet
 
-replace github.com/caerus-framework/caerus-framework => ../caerus-framework
