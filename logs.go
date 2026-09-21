@@ -87,6 +87,8 @@ type options struct {
 	stackTraces  bool
 	stackLevel   slog.Level
 	configSource string
+	srcEnvPrefix string
+	srcEnvSet    bool // true when WithSourceEnvPrefix was passed ("" disables overlay)
 }
 
 // Option configures the logs component at construction time.
@@ -134,11 +136,22 @@ func WithStackLevel(level slog.Level) Option {
 // cannot read the configuration component directly (import cycle), so the
 // framework delivers the freshly loaded value through OnConfigReload. The
 // component self-registers the source during argv absorption (default file
-// config/<name>.json, env prefix LOGS_, owner cf_logs); an argv --<name>
-// file-path override wins, and the app may also register its own Source[LogConfig]
-// for a custom default. Until the source loads, construction-time defaults apply.
+// config/<name>.json, env prefix from the source name — "logs" → LOGS_ —
+// owner cf_logs); an argv --<name> file-path override wins, and the app may
+// also register its own Source[LogConfig] for a custom default. Until the
+// source loads, construction-time defaults apply.
 func WithConfigSource(name string) Option {
 	return func(o *options) { o.configSource = name }
+}
+
+// WithSourceEnvPrefix sets the environment overlay prefix for the bound
+// configuration source (default: uppercase source name, "-" → "_", plus "_").
+// Pass "" to disable env overlay so only the file (and flags) apply.
+func WithSourceEnvPrefix(prefix string) Option {
+	return func(o *options) {
+		o.srcEnvPrefix = prefix
+		o.srcEnvSet = true
+	}
 }
 
 // New creates a logs component. Configure it with options; defaults are text

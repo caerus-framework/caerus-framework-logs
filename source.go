@@ -17,10 +17,12 @@ var _ cf.CoreConfigSource = (*Logs)(nil)
 // and registers the declaration on the component's behalf.
 //
 // The source is owned by the component: default file config/<name>.json, env
-// prefix LOGS_, owner cf_logs. An argv redeclaration wins: the --<name>
-// file-path flag ParseFlags registers overrides where the file is read from,
-// and the loaded value reaches the component through OnConfigReload (see
-// WithConfigSource). No source is declared when WithConfigSource was not given.
+// prefix from the source name ("logs" → LOGS_, "app-logs" → APP_LOGS_) unless
+// WithSourceEnvPrefix overrides it, owner cf_logs. An argv redeclaration
+// wins: the --<name> file-path flag ParseFlags registers overrides where the
+// file is read from, and the loaded value reaches the component through
+// OnConfigReload (see WithConfigSource). No source is declared when
+// WithConfigSource was not given.
 func (l *Logs) CoreConfigSource() ([]cf.ConfigSourceValue, error) {
 	name := l.configSource
 	if name == "" {
@@ -30,11 +32,22 @@ func (l *Logs) CoreConfigSource() ([]cf.ConfigSourceValue, error) {
 		Name:      name,
 		Path:      "config/" + name + ".json",
 		Format:    "json",
-		EnvPrefix: "LOGS_",
+		EnvPrefix: l.envPrefix(),
 		Owner:     ComponentName,
 		Validate:  validateLogConfigValue,
 		Sample:    LogConfig{},
 	}}, nil
+}
+
+func (l *Logs) envPrefix() string {
+	if l.cfg.srcEnvSet {
+		return l.cfg.srcEnvPrefix
+	}
+	return defaultSourceEnvPrefix(l.configSource)
+}
+
+func defaultSourceEnvPrefix(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(name, "-", "_")) + "_"
 }
 
 func validateLogConfigValue(v any) error {

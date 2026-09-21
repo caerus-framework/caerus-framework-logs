@@ -518,5 +518,77 @@ func TestSetLevelForDoesNotRedeliver(t *testing.T) {
 	}
 }
 
+func TestCoreConfigSourceEnvPrefixFollowsSourceName(t *testing.T) {
+	l := New(WithConfigSource("logs"))
+	decls, err := l.CoreConfigSource()
+	if err != nil {
+		t.Fatalf("CoreConfigSource: %v", err)
+	}
+	if len(decls) != 1 {
+		t.Fatalf("got %d decls, want 1", len(decls))
+	}
+	if decls[0].Name != "logs" || decls[0].Path != "config/logs.json" {
+		t.Fatalf("name/path = %q %q", decls[0].Name, decls[0].Path)
+	}
+	if decls[0].EnvPrefix != "LOGS_" {
+		t.Fatalf("default source %q: EnvPrefix = %q, want LOGS_", decls[0].Name, decls[0].EnvPrefix)
+	}
+	if decls[0].Owner != ComponentName {
+		t.Fatalf("Owner = %q, want %q", decls[0].Owner, ComponentName)
+	}
+
+	l = New(WithConfigSource("app-logs"))
+	decls, err = l.CoreConfigSource()
+	if err != nil {
+		t.Fatalf("CoreConfigSource(app-logs): %v", err)
+	}
+	if len(decls) != 1 {
+		t.Fatalf("got %d decls, want 1", len(decls))
+	}
+	if decls[0].Name != "app-logs" {
+		t.Fatalf("Name = %q, want app-logs", decls[0].Name)
+	}
+	if decls[0].Path != "config/app-logs.json" {
+		t.Fatalf("Path = %q, want config/app-logs.json", decls[0].Path)
+	}
+	if decls[0].EnvPrefix != "APP_LOGS_" {
+		t.Fatalf("nicknamed source: EnvPrefix = %q, want APP_LOGS_", decls[0].EnvPrefix)
+	}
+	if decls[0].Owner != ComponentName {
+		t.Fatalf("Owner must stay %q (component name), got %q", ComponentName, decls[0].Owner)
+	}
+}
+
+func TestCoreConfigSourceEnvPrefixOverride(t *testing.T) {
+	l := New(WithConfigSource("app-logs"), WithSourceEnvPrefix("LOGS_"))
+	decls, err := l.CoreConfigSource()
+	if err != nil {
+		t.Fatalf("CoreConfigSource: %v", err)
+	}
+	if decls[0].EnvPrefix != "LOGS_" {
+		t.Fatalf("WithSourceEnvPrefix: EnvPrefix = %q, want LOGS_", decls[0].EnvPrefix)
+	}
+
+	l = New(WithConfigSource("logs"), WithSourceEnvPrefix(""))
+	decls, err = l.CoreConfigSource()
+	if err != nil {
+		t.Fatalf("CoreConfigSource: %v", err)
+	}
+	if decls[0].EnvPrefix != "" {
+		t.Fatalf("empty prefix must disable overlay, got %q", decls[0].EnvPrefix)
+	}
+}
+
+func TestCoreConfigSourceOmitted(t *testing.T) {
+	l := New()
+	decls, err := l.CoreConfigSource()
+	if err != nil {
+		t.Fatalf("CoreConfigSource: %v", err)
+	}
+	if decls != nil {
+		t.Fatalf("no WithConfigSource must declare nothing, got %+v", decls)
+	}
+}
+
 // Ensure the compile-time contract holds.
 var _ cf.CaerusComponent = (*Logs)(nil)

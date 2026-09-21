@@ -31,6 +31,10 @@ type LogConfig struct {
 	// follows the process-global level again. Nil/omitted keeps current overrides
 	// (API SetLevelFor from code is not wiped). An empty map {} clears all
 	// config-owned overrides.
+	//
+	// File and reload only: there is no env or flag tag. Configuration cannot
+	// overlay a map from the process environment, so LOGS_COMPONENT_LEVELS
+	// does nothing. Change this in the JSON/YAML file (or call SetLevelFor).
 	ComponentLevels map[string]string `json:"component_levels,omitempty" yaml:"component_levels,omitempty"`
 }
 

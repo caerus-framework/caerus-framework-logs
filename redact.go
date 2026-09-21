@@ -38,8 +38,9 @@ func SecretSet(key, v string) slog.Attr {
 
 // ReplaceAttrSecretKeys returns a slog HandlerOptions.ReplaceAttr function
 // that rewrites matching attribute keys to [redacted] when the value is a
-// non-empty string. Opt in on a handler you own; it does not wrap slog.Default
-// and does not walk structs. Prefer RedactedString / secret tags.
+// non-empty string. Opt in on a handler you own; cf_logs.New / buildLogger
+// does not install it, it does not wrap slog.Default, and it does not walk
+// structs. Prefer RedactedString / secret tags.
 func ReplaceAttrSecretKeys(keys ...string) func(groups []string, a slog.Attr) slog.Attr {
 	set := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
