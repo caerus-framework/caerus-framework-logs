@@ -22,6 +22,11 @@ type LogConfig struct {
 	// level (default error). Nil keeps the current setting; explicit true/false
 	// overrides.
 	StackTraces *bool `json:"stack_traces,omitempty" yaml:"stack_traces,omitempty" env:"STACK_TRACES" flag:"stack-traces"`
+	// TrimStackPaths shortens file paths in stack frames to the last three
+	// slash-separated segments. Nil keeps the current setting; explicit
+	// true/false overrides. Default (unset / false) prints full paths.
+	// Only applies when stack traces are enabled.
+	TrimStackPaths *bool `json:"trim_stack_paths,omitempty" yaml:"trim_stack_paths,omitempty" env:"TRIM_STACK_PATHS" flag:"trim-stack-paths"`
 	// StackLevel is the threshold for stack tracebacks ("debug", "info", "warn",
 	// "error"). Empty keeps the current threshold (default error). Only takes
 	// effect when stack traces are enabled.

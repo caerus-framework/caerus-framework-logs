@@ -20,7 +20,8 @@ tracebacks on errors — `log/slog` plus traceback.
   (`WithReportCaller`), like logrus `ReportCaller`.
 - **Stack tracebacks**: attach a formatted stack traceback to records at or
   above a configurable level (`WithStackTraces` + `WithStackLevel`), with the
-  handler's own frames and slog/runtime internals filtered out.
+  handler's own frames and slog/runtime internals filtered out. Optional
+  `WithTrimStackPaths` shortens file paths (off by default).
 - **Dynamic level**: process-global `SetLevel`, plus per-component `SetLevelFor`
   / `ResetLevel` so a noisy peer can be traced without flooding the process.
 - **Runtime reconfiguration**: `Reconfigure` rebuilds the logger (format, writer,
@@ -220,6 +221,7 @@ Options are construction-time `cf_logs.Option`s:
 | `WithReportCaller(bool)` | `false` | Add `source` (file:line) to every record. |
 | `WithStackTraces(bool)` | `false` | Attach a stack traceback to records at/above the stack level. |
 | `WithStackLevel(slog.Level)` | `slog.LevelError` | Threshold for stack tracebacks. |
+| `WithTrimStackPaths(bool)` | `false` | When stacks are on, keep only the last three path segments in file names (`module/dir/file.go`). Full paths remain the default. |
 | `WithConfigSource(string)` | `""` | Bind a `Source[LogConfig]` (owner `cf_logs.ComponentName`); `OnConfigReload` applies its value live via `ApplyConfig`. Env prefix defaults from the source name (`"logs"` → `LOGS_`). |
 | `WithSourceEnvPrefix(string)` | derived | Override that env prefix. `""` disables env overlay (file and flags only). |
 
@@ -252,11 +254,29 @@ and skipped (last-good kept).
 `stack_level` is the threshold for tracebacks when `stack_traces` is on
 (same names as `level`; empty keeps the current threshold, default error).
 
+Each stack frame is **function name + file path + line**. This handler
+does **not** print function arguments or local variables
+(`runtime.CallersFrames`, not `debug.Stack()`). A secret in the log
+**message** (`fmt.Errorf`, `slog.Any`) is still a leak; the traceback
+does not create that leak. It can still enlarge what you retain:
+
+- **Paths.** A full file path can include a home directory (`/Users/…`)
+  or a cluster layout.
+- **Volume.** `stack_traces: true` with `stack_level` at debug attaches a
+  traceback to every debug line.
+
 **Ops:** leave `stack_traces` off in production, or keep `stack_level` at
-`error` (the default). Debug-level stacks on every request enlarge the
-log volume and can print caller paths and in-scope arguments next to a
-secret you already wrapped. Forensics belong in a break-glass deploy,
-not the steady-state config.
+`error` (the default). Forensics belong in a break-glass deploy, not the
+steady-state config.
+
+Optional path trimming is **off** by default. Set
+`trim_stack_paths: true` (or `WithTrimStackPaths(true)` / env
+`LOGS_TRIM_STACK_PATHS`) to print only the last three slash-separated
+segments (`caerus-framework-logs/logs_test.go` style). Function names and
+line numbers stay. Omitted in a reload keeps the current value (`*bool`).
+This setting is on `LogConfig` / `WithTrimStackPaths`; the golden
+`cf.LogsSettings` seed does not have a matching field — put it in
+`config/logs.json` (or the simple `cf_logs.New` path).
 
 The env overlay uses the source name: `ConfigSource: "logs"` →
 `LOGS_LEVEL`, `LOGS_FORMAT`, `LOGS_STACK_TRACES`. A nickname

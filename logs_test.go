@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -165,6 +166,67 @@ func TestStackLevelThreshold(t *testing.T) {
 	errOut := buf.String()
 	if !strings.Contains(errOut, "traceEmit") {
 		t.Fatalf("error must carry a stack trace, got %q", errOut)
+	}
+}
+
+func TestTrimStackPath(t *testing.T) {
+	got := trimStackPath("/Users/phil/code/caerus-framework/caerus-framework-logs/stack.go")
+	want := "caerus-framework/caerus-framework-logs/stack.go"
+	if got != want {
+		t.Fatalf("trimStackPath = %q, want %q", got, want)
+	}
+	if got := trimStackPath("short.go"); got != "short.go" {
+		t.Fatalf("short path = %q", got)
+	}
+	if got := trimStackPath("a/b"); got != "a/b" {
+		t.Fatalf("two segments = %q", got)
+	}
+}
+
+func TestStackTracesTrimPaths(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(WithWriter(&buf), WithStackTraces(true), WithTrimStackPaths(true))
+	if !l.TrimStackPaths() {
+		t.Fatal("TrimStackPaths() should be true")
+	}
+	traceEmit(l)
+	out := buf.String()
+	if !strings.Contains(out, "logs_test.go") {
+		t.Fatalf("trimmed stack must still name the file, got %q", out)
+	}
+	found := false
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "logs_test.go") {
+			continue
+		}
+		found = true
+		file, _, ok := strings.Cut(line, ":")
+		if !ok {
+			t.Fatalf("stack file line %q missing :line", line)
+		}
+		if filepath.IsAbs(file) || strings.HasPrefix(file, "/") {
+			t.Fatalf("trimmed stack still has an absolute path: %q", line)
+		}
+		if strings.Count(file, "/") > stackPathSegments-1 {
+			t.Fatalf("trimmed path has too many segments: %q", file)
+		}
+	}
+	if !found {
+		t.Fatalf("no stack file line for logs_test.go in %q", out)
+	}
+}
+
+func TestApplyConfigOmitsPreserveTrimStackPaths(t *testing.T) {
+	l := New(WithWriter(io.Discard), WithStackTraces(true), WithTrimStackPaths(true))
+	l.ApplyConfig(LogConfig{Level: "warn"})
+	if !l.TrimStackPaths() {
+		t.Fatal("omitted trim_stack_paths cleared TrimStackPaths")
+	}
+	off := false
+	l.ApplyConfig(LogConfig{TrimStackPaths: &off})
+	if l.TrimStackPaths() {
+		t.Fatal("explicit false did not disable trim")
 	}
 }
 
