@@ -20,7 +20,8 @@ tracebacks on errors — `log/slog` plus traceback.
   (`WithReportCaller`), like logrus `ReportCaller`.
 - **Stack tracebacks**: attach a formatted stack traceback to records at or
   above a configurable level (`WithStackTraces` + `WithStackLevel`), with the
-  handler's own frames and slog/runtime internals filtered out.
+  handler's own frames and slog/runtime internals filtered out. Optional
+  `WithTrimStackPaths` shortens file paths (off by default).
 - **Dynamic level**: process-global `SetLevel`, plus per-component `SetLevelFor`
   / `ResetLevel` so a noisy peer can be traced without flooding the process.
 - **Runtime reconfiguration**: `Reconfigure` rebuilds the logger (format, writer,
@@ -31,11 +32,14 @@ tracebacks on errors — `log/slog` plus traceback.
 
 ## Cooperative redaction
 
-Logs **prints** secrets as `[redacted]`. Configuration **declares** which
-fields are secrets (`secret:"redact"` on the config struct). This is
-cooperative: `fmt.Sprintf`, error strings, and `slog.Info("cfg", cfg)` on a
-raw struct still leak. There is no process-wide `ReplaceAttr` on
-`slog.Default()`.
+Logs **prints** secrets as `[redacted]` when you mark them. Configuration
+**declares** which fields are secrets (`secret:"redact"` on the config
+struct). That is the whole contract.
+
+It is **not** a process-wide filter. `fmt.Sprintf`, `fmt.Errorf` / `%w`,
+and `slog.Info("cfg", cfg)` on a raw struct still leak. The stock JSON
+and text handlers do **not** install `ReplaceAttr`. `slog.Default()` is
+**not** wrapped.
 
 | Concern | What to do | Default |
 |---|---|---|
@@ -49,11 +53,66 @@ log.Info("reload", cf_logs.SecretSet("password", cfg.Password), "host", cfg.Host
 log.Info("reload", cf_configuration.LogArgs(cfg)...) // honors secret tags; overlay/Get unchanged
 ```
 
-`ReplaceAttrSecretKeys("password")` is an **opt-in** handler hook for keys you
-list. It does not walk structs.
+### `ReplaceAttrSecretKeys` is for a handler you own
+
+`ReplaceAttrSecretKeys("password")` is a helper that returns a
+`slog.HandlerOptions.ReplaceAttr` function. The **stock** logs component
+does not call it. Use it only when you build your own handler (tests, a
+sidecar process, a one-off binary that is not `cf_logs.New`).
+
+It rewrites matching **attribute keys** whose value is a non-empty
+string. It does not walk structs, does not parse error strings, and does
+not see the message text.
+
+```text
+Wrong:  cf_logs.New(...) already redacts slog keys named "password".
+        → It does not. buildLogger has no ReplaceAttr.
+
+Right:  log.Info("reload", "password", cf_logs.RedactedString(cfg.Password))
+        or cf_configuration.LogArgs(cfg) for tagged struct fields.
+
+Right, custom handler only:
+        slog.NewJSONHandler(w, &slog.HandlerOptions{
+            ReplaceAttr: cf_logs.ReplaceAttrSecretKeys("password", "api_key"),
+        })
+```
 
 `RedactURLUserinfo` strips a URL password for error strings. Prefer not
 wrapping `pgx`/`url.Parse` errors that interpolate the raw DSN.
+
+### Why this module does not wrap `slog.Default()`
+
+A tempting “make logging safe” change is: call `slog.SetDefault` with
+the logs component’s logger, and hang a `ReplaceAttr` on it that
+redacts keys named `password` / `secret`. That would be
+**non-cooperative redaction** — the process tries to sanitise whatever
+happens to flow through the default slog handler, without the caller
+marking secrets.
+
+We do not do that. Here is what that design actually is, and why it
+fails juniors:
+
+1. **It only sees slog attributes on that one handler.** A DSN already
+   baked into `fmt.Errorf("connect: %w", err)`, a `slog.Any("cfg", cfg)`
+   dump, or a library that logs with its own handler never hits
+   `ReplaceAttr`. Operators would think “logging is safe” and stop using
+   `RedactedString` / `secret:"redact"`.
+2. **A default key list is both too small and too loud.** `passwd`,
+   `dsn`, `authorization`, nested JSON, and `password_set` presence
+   attrs miss the list; a harmless field that happens to be named
+   `password` gets wiped. That is not a policy, it is a word list.
+3. **`slog.SetDefault` is process-global.** Tests, other libraries, and
+   `Init` order would race over who owns the default. Caerus components
+   are required to subscribe with `OnReconfigureFor(c.Name(), …)` so
+   each gets a live logger. Wrapping `slog.Default()` would paper over
+   a component that forgot to subscribe — the bug would look like it
+   works until `SetLevelFor` or a rebuild.
+4. **Trust stays with the author of the log line.** The person who has
+   the secret in a variable is the person who can wrap it. A global
+   filter cannot see inside `%w` chains after the fact.
+
+Cooperative helpers (`RedactedString`, `SecretSet`, `LogArgs`,
+`RedactURLUserinfo`) are the safety net we can actually stand behind.
 
 ## Wiring
 
@@ -64,8 +123,11 @@ source. Use bare `AddComponent` only for one-off binaries or tests.
 ### Golden path (`FrameworkOptions.Logs`)
 
 `cf.New` always builds logs as the first bootstrap stage. Point it at the
-`logs` configuration source (default file `config/logs.json`, env `LOGS_`)
-with the seed’s `ConfigSource` field:
+`logs` configuration **source** (default file `config/logs.json`, env
+prefix `LOGS_`) with the seed’s `ConfigSource` field. That string is the
+source name (`--logs`, `LOGS_LEVEL`). It is **not** the component name
+peers put in `GetDependencies` — that stays `cf_logs.ComponentName`
+(`"logs"`) even if you nickname the source.
 
 ```go
 fw := cf.New(&cf.FrameworkOptions{
@@ -89,11 +151,12 @@ if err := fw.RunWithSignals(context.Background()); err != nil {
 Import `_ "github.com/caerus-framework/caerus-framework-logs"` (or any
 `cf_logs` symbol) so the core factory registers. Peers subscribe in `Init`
 with `OnReconfigureFor(c.Name(), …)` and list `cf_logs.ComponentName` in
-`GetDependencies`:
+`GetDependencies` (the component’s `Name()`, not the config source
+nickname):
 
 ```go
 func (c *CFPostgres) GetDependencies() []string {
-	return []string{cf_logs.ComponentName}
+	return []string{cf_logs.ComponentName} // "logs"
 }
 
 func (c *CFPostgres) Init(ctx context.Context, fw *cf.CaerusFramework) error {
@@ -114,6 +177,18 @@ func (c *CFPostgres) Shutdown(ctx context.Context) error {
 	// …
 	return nil
 }
+```
+
+```text
+Wrong:  GetDependencies returns []string{"app-logs"} because
+        LogsSettings.ConfigSource is "app-logs".
+        → Validate / caerusvet look up the component Name() ("logs").
+          The source nickname is only for the file, --flag, and env prefix.
+
+Right:  GetDependencies returns []string{cf_logs.ComponentName}
+        even when ConfigSource is "app-logs".
+        Env overlay for that nickname is APP_LOGS_ (not LOGS_), unless
+        you pass WithSourceEnvPrefix("LOGS_") on cf_logs.New.
 ```
 
 ### Simple path (`AddComponent`)
@@ -146,7 +221,9 @@ Options are construction-time `cf_logs.Option`s:
 | `WithReportCaller(bool)` | `false` | Add `source` (file:line) to every record. |
 | `WithStackTraces(bool)` | `false` | Attach a stack traceback to records at/above the stack level. |
 | `WithStackLevel(slog.Level)` | `slog.LevelError` | Threshold for stack tracebacks. |
-| `WithConfigSource(string)` | `""` | Bind a `Source[LogConfig]` (owner `cf_logs.ComponentName`); `OnConfigReload` applies its value live via `ApplyConfig`. |
+| `WithTrimStackPaths(bool)` | `false` | When stacks are on, keep only the last three path segments in file names (`module/dir/file.go`). Full paths remain the default. |
+| `WithConfigSource(string)` | `""` | Bind a `Source[LogConfig]` (owner `cf_logs.ComponentName`); `OnConfigReload` applies its value live via `ApplyConfig`. Env prefix defaults from the source name (`"logs"` → `LOGS_`). |
+| `WithSourceEnvPrefix(string)` | derived | Override that env prefix. `""` disables env overlay (file and flags only). |
 
 `cf.LogsSettings` (golden seed) mirrors `LogConfig`: `Format`, `Level`,
 `ReportCaller` / `StackTraces` (`*bool`), `StackLevel` (string), and
@@ -176,6 +253,37 @@ and skipped (last-good kept).
 
 `stack_level` is the threshold for tracebacks when `stack_traces` is on
 (same names as `level`; empty keeps the current threshold, default error).
+
+Each stack frame is **function name + file path + line**. This handler
+does **not** print function arguments or local variables
+(`runtime.CallersFrames`, not `debug.Stack()`). A secret in the log
+**message** (`fmt.Errorf`, `slog.Any`) is still a leak; the traceback
+does not create that leak. It can still enlarge what you retain:
+
+- **Paths.** A full file path can include a home directory (`/Users/…`)
+  or a cluster layout.
+- **Volume.** `stack_traces: true` with `stack_level` at debug attaches a
+  traceback to every debug line.
+
+**Ops:** leave `stack_traces` off in production, or keep `stack_level` at
+`error` (the default). Forensics belong in a break-glass deploy, not the
+steady-state config.
+
+Optional path trimming is **off** by default. Set
+`trim_stack_paths: true` (or `WithTrimStackPaths(true)` / env
+`LOGS_TRIM_STACK_PATHS`) to print only the last three slash-separated
+segments (`caerus-framework-logs/logs_test.go` style). Function names and
+line numbers stay. Omitted in a reload keeps the current value (`*bool`).
+This setting is on `LogConfig` / `WithTrimStackPaths`; the golden
+`cf.LogsSettings` seed does not have a matching field — put it in
+`config/logs.json` (or the simple `cf_logs.New` path).
+
+The env overlay uses the source name: `ConfigSource: "logs"` →
+`LOGS_LEVEL`, `LOGS_FORMAT`, `LOGS_STACK_TRACES`. A nickname
+`ConfigSource: "app-logs"` → `APP_LOGS_LEVEL` (same `UPPER_SNAKE`
+rule as postgres and mail). Override with `WithSourceEnvPrefix` on
+`cf_logs.New`. Golden `FrameworkOptions.Logs` has no prefix field — keep
+the source named `"logs"` unless you intend the derived prefix.
 
 ### Runtime reconfiguration
 
@@ -216,7 +324,10 @@ immediately. A component override may be **noisier or quieter** than the global
 level. `Logs.Shutdown` drops all remaining subscribers, so no deliveries happen
 during teardown.
 
-Reloadable map (same names as `level`):
+Reloadable map (same names as `level`). **File / reload only** — this
+field has no `env` or `flag` tag. Configuration cannot overlay a map
+from the process environment, so `LOGS_COMPONENT_LEVELS` does nothing.
+Edit `config/logs.json` (or call `SetLevelFor` in code).
 
 ```json
 {

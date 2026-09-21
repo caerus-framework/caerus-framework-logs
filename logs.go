@@ -86,7 +86,10 @@ type options struct {
 	reportCaller bool
 	stackTraces  bool
 	stackLevel   slog.Level
+	trimStack    bool
 	configSource string
+	srcEnvPrefix string
+	srcEnvSet    bool // true when WithSourceEnvPrefix was passed ("" disables overlay)
 }
 
 // Option configures the logs component at construction time.
@@ -129,16 +132,35 @@ func WithStackLevel(level slog.Level) Option {
 	return func(o *options) { o.stackLevel = level }
 }
 
+// WithTrimStackPaths shortens file paths in stack frames to the last three
+// slash-separated segments (default false: full paths). Absolute prefixes such
+// as /Users/name or a cluster mount stay out of the log. Function names and
+// line numbers are unchanged. Only applies when stack traces are enabled.
+func WithTrimStackPaths(enabled bool) Option {
+	return func(o *options) { o.trimStack = enabled }
+}
+
 // WithConfigSource names the configuration source (caerus-framework-
 // configuration) whose LogConfig is applied to the component. The logs module
 // cannot read the configuration component directly (import cycle), so the
 // framework delivers the freshly loaded value through OnConfigReload. The
 // component self-registers the source during argv absorption (default file
-// config/<name>.json, env prefix LOGS_, owner cf_logs); an argv --<name>
-// file-path override wins, and the app may also register its own Source[LogConfig]
-// for a custom default. Until the source loads, construction-time defaults apply.
+// config/<name>.json, env prefix from the source name — "logs" → LOGS_ —
+// owner cf_logs); an argv --<name> file-path override wins, and the app may
+// also register its own Source[LogConfig] for a custom default. Until the
+// source loads, construction-time defaults apply.
 func WithConfigSource(name string) Option {
 	return func(o *options) { o.configSource = name }
+}
+
+// WithSourceEnvPrefix sets the environment overlay prefix for the bound
+// configuration source (default: uppercase source name, "-" → "_", plus "_").
+// Pass "" to disable env overlay so only the file (and flags) apply.
+func WithSourceEnvPrefix(prefix string) Option {
+	return func(o *options) {
+		o.srcEnvPrefix = prefix
+		o.srcEnvSet = true
+	}
 }
 
 // New creates a logs component. Configure it with options; defaults are text
@@ -173,7 +195,7 @@ func (l *Logs) buildLogger() {
 		handler = slog.NewTextHandler(l.cfg.writer, opts)
 	}
 	if l.cfg.stackTraces {
-		handler = &stackTraceHandler{next: handler, level: l.cfg.stackLevel}
+		handler = &stackTraceHandler{next: handler, level: l.cfg.stackLevel, trim: l.cfg.trimStack}
 	}
 	l.base = handler
 	l.logger = l.wrapLocked("")
@@ -315,6 +337,14 @@ func (l *Logs) StackLevel() slog.Level {
 	return l.cfg.stackLevel
 }
 
+// TrimStackPaths returns whether stack frames keep only the last three path
+// segments. False (the default) prints the runtime's full file path.
+func (l *Logs) TrimStackPaths() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.cfg.trimStack
+}
+
 // Overrides returns a snapshot of per-component level overrides.
 func (l *Logs) Overrides() map[string]slog.Level {
 	l.mu.RLock()
@@ -329,7 +359,7 @@ func (l *Logs) Overrides() map[string]slog.Level {
 // Reconfigure rebuilds the logger from the given construction options and
 // delivers the new logger to every OnReconfigure / OnReconfigureFor subscriber.
 // It applies the handler-affecting options — WithFormat, WithWriter,
-// WithReportCaller, WithStackTraces, WithStackLevel. WithLevel is not applied
+// WithReportCaller, WithStackTraces, WithStackLevel, WithTrimStackPaths. WithLevel is not applied
 // here: the global level is managed exclusively through SetLevel, and rebuilding
 // preserves the current runtime level and per-component overrides. Subscribers
 // are notified outside the internal lock.
@@ -358,7 +388,7 @@ func (l *Logs) Reconfigure(opts ...Option) {
 }
 
 // ApplyConfig applies a LogConfig to the running component. Non-empty Format
-// and non-nil ReportCaller/StackTraces (and non-empty StackLevel) rebuild the
+// and non-nil ReportCaller/StackTraces/TrimStackPaths (and non-empty StackLevel) rebuild the
 // logger (delivering the new logger to every OnReconfigure / OnReconfigureFor
 // subscriber); omitted bool fields keep the current forensic settings. Level is
 // applied through SetLevel so per-component overrides (SetLevelFor) keep
@@ -380,6 +410,9 @@ func (l *Logs) ApplyConfig(cfg LogConfig) {
 	}
 	if cfg.StackTraces != nil {
 		opts = append(opts, WithStackTraces(*cfg.StackTraces))
+	}
+	if cfg.TrimStackPaths != nil {
+		opts = append(opts, WithTrimStackPaths(*cfg.TrimStackPaths))
 	}
 	if cfg.StackLevel != "" {
 		lv, err := ParseLevel(cfg.StackLevel)
